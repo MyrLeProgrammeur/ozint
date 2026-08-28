@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# 1.88, not 1.85: edition 2024 alone would allow 1.85, but the code uses let-chains
+# (`if let ... && let ...`), stabilised in 1.88. Declared so cargo refuses an old toolchain
+# with a clear message instead of failing deep in a parse error.
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/MyrLeProgrammeur/ozint"
+publish = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

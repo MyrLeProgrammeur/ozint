@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # `rqrr`, `image` and `rusqlite`'s bundled SQLite all build C; the runner has a
+      # compiler, but pkg-config and the SSL headers are not guaranteed.
+      - name: System dependencies
+        # `ffmpeg` is optional for *running* OZINT — only `video-local-probe` shells out to it —
+        # but it is installed here on purpose. `local_probe`'s tests skip when it is absent so
+        # contributors without it are not blocked, and that skip is only honest if some machine
+        # is guaranteed to run them. This is that machine.
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev ffmpeg
+      - name: Test
+        run: cargo test --workspace
+      - name: Clippy
+        # A warning is a failure. The codebase is warning-free today and staying that way is
+        # cheaper than ever cleaning it up again.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Format
+        run: cargo fmt --all --check
+
+  web:
+    name: Cockpit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npx vite build

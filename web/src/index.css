@@ -1,0 +1,20 @@
+/*
+ * Reset only. Every colour, font and spacing decision lives in `src/lib/ozint/tokens.ts`
+ * and is applied as inline styles by the components — there is no stylesheet to keep in
+ * sync with the token table, which is the point.
+ */
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #07090c;
+}

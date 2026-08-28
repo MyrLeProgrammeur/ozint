@@ -1,0 +1,4 @@
+# The codebase was written to ~100 columns by hand, including its comments. Keeping the
+# formatter at the same width means `cargo fmt` never reflows a paragraph somebody wrapped
+# deliberately.
+max_width = 100

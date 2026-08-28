@@ -1,0 +1,13 @@
+[package]
+name = "ozint-db"
+description = "SQLite handle for OZINT: the oz_* schema is owned by the engine, this crate only opens the file."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ozint-core = { version = "0.1.0", path = "../ozint-core" }
+rusqlite = { version = "0.40.1", features = ["bundled"] }

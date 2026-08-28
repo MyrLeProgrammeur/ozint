@@ -1,0 +1,69 @@
+# Optional local sidecars for the deep-username (Maigret), broad-sweep
+# (SpiderFoot), account-existence (holehe) and broad-existence-plus-metadata (Blackbird) OZINT
+# tools. None is required for the rest of `ozint` to work: every tool in this crate that
+# needs one of these containers reports a clean skip (a `HttpError`/connection-refused, folded
+# honestly by `fold_fetch_failure`) when it is not running. See
+# `crates/ozint/src/sources/sidecar/mod.rs` for the module doc this file is the
+# infrastructure half of.
+#
+# Usage:
+#   docker compose -f crates/ozint/docker/docker-compose.yml up -d
+#   curl http://localhost:5000/            # Maigret web UI/API
+#   curl http://localhost:5001/ping        # SpiderFoot health
+#   curl http://localhost:5100/health      # holehe shim health
+#   curl http://localhost:5200/health      # Blackbird shim health
+#
+# All four are opt-in, local-only sidecars — nothing here is exposed beyond localhost by
+# default.
+
+services:
+  # Maigret's own published image, `web` variant: auto-launches its CherryPy-based web
+  # interface (not the CLI-only `latest` tag) on port 5000. Verified real and pullable
+  # (soxoj/maigret, MIT, 146k+ pulls) 2026-08-25 — see the module doc for what its HTTP
+  # surface actually looks like once probed.
+  maigret:
+    image: soxoj/maigret:web
+    container_name: ozint-maigret
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  # SpiderFoot ships no official pre-built Docker Hub image — its own `docker-compose.yml`
+  # (github.com/smicallef/spiderfoot) builds from the repo's own Dockerfile. A git URL as the
+  # build context does the same thing here without vendoring the source into this repo.
+  # Real REST surface, verified 2026-08-25 by reading `sfwebui.py`: CherryPy endpoints under
+  # `/` (not a JSON-RPC-style `/api?...`) — `POST /startscan`, `GET /scanstatus?id=`,
+  # `GET /scaneventresultsunique?id=&eventType=`. Port 5001 is SpiderFoot's own default.
+  spiderfoot:
+    build: https://github.com/smicallef/spiderfoot.git
+    container_name: ozint-spiderfoot
+    ports:
+      - "5001:5001"
+    volumes:
+      - spiderfoot-data:/var/lib/spiderfoot
+    restart: unless-stopped
+
+  # `entity-email`'s account-existence sweep. No official server image exists for holehe (a
+  # CLI-only tool) — this builds a small Flask shim around it. See
+  # `crates/ozint/docker/holehe/` and `sources/sidecar/holehe.rs`'s module doc.
+  holehe:
+    build: ./holehe
+    container_name: ozint-holehe
+    ports:
+      - "5100:5100"
+    restart: unless-stopped
+
+  # `entity-username`'s and `entity-email`'s broad-existence sweep — 700+ sites (WhatsMyName)
+  # for usernames, a curated 16-site list with declarative per-site metadata extraction for
+  # emails. No official server image exists for Blackbird (a CLI-only tool) either — this
+  # builds a small Flask shim around it. See `crates/ozint/docker/blackbird/` and
+  # `sources/sidecar/blackbird.rs`'s module doc.
+  blackbird:
+    build: ./blackbird
+    container_name: ozint-blackbird
+    ports:
+      - "5200:5200"
+    restart: unless-stopped
+
+volumes:
+  spiderfoot-data:

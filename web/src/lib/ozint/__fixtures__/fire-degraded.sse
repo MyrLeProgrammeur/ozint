@@ -1,0 +1,34 @@
+data: {"type":"node","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","node":{"id":"10d5bdb1-18ed-45e5-971c-cbc411a085ae","investigationId":"e681eee6-96f3-4cb4-8803-30a592262172","ordinal":0,"depth":0,"type":"username","value":"torvalds","display":"torvalds","dedupKey":"username:torvalds","payload":{"type":"username","hits":[],"sitesChecked":0,"sitesConfirmed":0},"status":"idle","provenance":{"sourceToolId":"seed","method":"typed by the analyst, type resolved by shape","retrievedAt":"2026-08-23T19:37:13.257Z","recordStatus":{"kind":"as-returned"},"toolChain":["seed"]},"createdAt":"2026-08-23T19:37:13.254Z"}}
+
+data: {"type":"layerStart","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","investigationId":"e681eee6-96f3-4cb4-8803-30a592262172","parentNodeId":"10d5bdb1-18ed-45e5-971c-cbc411a085ae","firing":6,"maxPossible":7,"gated":0}
+
+data: {"type":"toolStart","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","toolId":"wmn-probe","label":"WhatsMyName","gated":false}
+
+data: {"type":"toolDone","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","report":{"toolId":"wmn-probe","label":"WhatsMyName","outcome":{"kind":"parse-error","message":"wmn dataset response was not JSON"},"elapsedMs":6,"results":0,"gated":false,"method":"queried WhatsMyName's site list for the handle"}}
+
+data: {"type":"toolStart","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","toolId":"github-user","label":"GitHub","gated":false}
+
+data: {"type":"toolDone","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","report":{"toolId":"github-user","label":"GitHub","outcome":{"kind":"http-error","status":401,"message":"{\r\n  \"message\": \"Bad credentials\",\r\n  \"documentation_url\": \"https://docs.github.com/rest\",\r\n  \"status\": \"401\"\r\n}"},"elapsedMs":419,"results":0,"gated":false,"method":"queried GitHub's public profile API for the handle"}}
+
+data: {"type":"toolStart","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","toolId":"bluesky-actor","label":"Bluesky","gated":false}
+
+data: {"type":"toolDone","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","report":{"toolId":"bluesky-actor","label":"Bluesky","outcome":{"kind":"http-error","status":400,"message":"{\"error\":\"InvalidRequest\",\"message\":\"Invalid app.bsky.actor.getProfile params: Invalid AT identifier (got \\\"torvalds\\\")\"}"},"elapsedMs":347,"results":0,"gated":false,"method":"queried Bluesky's public AT Proto AppView for the handle"}}
+
+data: {"type":"toolStart","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","toolId":"gravatar-profile","label":"Gravatar","gated":false}
+
+data: {"type":"toolDone","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","report":{"toolId":"gravatar-profile","label":"Gravatar","outcome":{"kind":"ok-empty"},"elapsedMs":456,"results":0,"gated":false,"method":"queried Gravatar's public profile API for the username slug"}}
+
+data: {"type":"toolStart","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","toolId":"hn-algolia","label":"Hacker News","gated":false}
+
+data: {"type":"toolDone","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","report":{"toolId":"hn-algolia","label":"Hacker News","outcome":{"kind":"ok-empty"},"elapsedMs":1,"results":0,"gated":false,"method":"searched Algolia's Hacker News index for items by the handle"}}
+
+data: {"type":"toolStart","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","toolId":"mastodon-lookup","label":"Mastodon","gated":false}
+
+data: {"type":"toolDone","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","report":{"toolId":"mastodon-lookup","label":"Mastodon","outcome":{"kind":"ok-with-results","count":1},"elapsedMs":402,"results":1,"gated":false,"method":"looked the handle up on a fixed list of public Mastodon instances"}}
+
+data: {"type":"parentPayload","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","nodeId":"10d5bdb1-18ed-45e5-971c-cbc411a085ae","patch":{},"sections":[{"id":"mastodon-lookup","label":"Mastodon","kind":"key-value","rows":[{"label":"Mastodon","value":"Torvalds@mastodon.social","href":"https://mastodon.social/@Torvalds","sourceToolId":"mastodon-lookup"},{"label":"Followers","value":"0","sourceToolId":"mastodon-lookup"},{"label":"Posts","value":"0","sourceToolId":"mastodon-lookup"},{"label":"Created","value":"2022-12-02T00:00:00.000Z","sourceToolId":"mastodon-lookup"}]}]}
+
+data: {"type":"layerDegraded","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","newChildren":0,"reports":[{"toolId":"youtube-channel","label":"YouTube","outcome":{"kind":"skipped-no-key","env_var":"YOUTUBE_API_KEY"},"elapsedMs":0,"results":0,"gated":false,"method":"queried YouTube's Data API v3 for a channel with the handle"},{"toolId":"wmn-probe","label":"WhatsMyName","outcome":{"kind":"parse-error","message":"wmn dataset response was not JSON"},"elapsedMs":6,"results":0,"gated":false,"method":"queried WhatsMyName's site list for the handle"},{"toolId":"github-user","label":"GitHub","outcome":{"kind":"http-error","status":401,"message":"{\r\n  \"message\": \"Bad credentials\",\r\n  \"documentation_url\": \"https://docs.github.com/rest\",\r\n  \"status\": \"401\"\r\n}"},"elapsedMs":419,"results":0,"gated":false,"method":"queried GitHub's public profile API for the handle"},{"toolId":"bluesky-actor","label":"Bluesky","outcome":{"kind":"http-error","status":400,"message":"{\"error\":\"InvalidRequest\",\"message\":\"Invalid app.bsky.actor.getProfile params: Invalid AT identifier (got \\\"torvalds\\\")\"}"},"elapsedMs":347,"results":0,"gated":false,"method":"queried Bluesky's public AT Proto AppView for the handle"},{"toolId":"gravatar-profile","label":"Gravatar","outcome":{"kind":"ok-empty"},"elapsedMs":456,"results":0,"gated":false,"method":"queried Gravatar's public profile API for the username slug"},{"toolId":"hn-algolia","label":"Hacker News","outcome":{"kind":"ok-empty"},"elapsedMs":1,"results":0,"gated":false,"method":"searched Algolia's Hacker News index for items by the handle"},{"toolId":"mastodon-lookup","label":"Mastodon","outcome":{"kind":"ok-with-results","count":1},"elapsedMs":402,"results":1,"gated":false,"method":"looked the handle up on a fixed list of public Mastodon instances"}]}
+
+data: {"type":"summary","layerId":"0d3a6fbe-56b6-4d2b-b8f3-a2a847beb7fe","text":"The lookup returned no new nodes; only the Mastodon lookup produced a single result. The YouTube, WhatsMyName, GitHub, and Bluesky tools failed (YouTube was skipped due to missing API key, WhatsMyName could not parse the response, GitHub returned a 401 error, and Bluesky returned a 400 error). Gravatar and Hacker News ran without error but found nothing.","fallback":false}
+

@@ -1,0 +1,16 @@
+[package]
+name = "ozint-llm"
+description = "A minimal OpenAI-compatible chat-completion client. OZINT's only LLM dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+ozint-core = { version = "0.1.0", path = "../ozint-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["time"] }

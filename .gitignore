@@ -1,0 +1,27 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Node
+node_modules/
+web/dist/
+*.tsbuildinfo
+
+# Runtime data — investigations, the media store, the freeze record
+.data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets
+.env
+.env.local
+!.env.example
+
+# Local offline databases (GeoLite2 and friends are not redistributable)
+*.mmdb
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
