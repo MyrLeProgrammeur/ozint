@@ -46,6 +46,16 @@ rather than implying a paid product that does not exist.
 
 ## The most valuable thing anyone could do
 
+### Make findings pursuable
+
+See issue #8 and the five issues under it. Tools put investigable values in `rows` — which are
+dead ends — instead of `children`, which are nodes. The effect is that an investigation stops
+growing exactly where it should branch, and it is why firing on an email address can produce
+nothing at all.
+
+This is now ahead of the test blind spot below, not because it is deeper but because it is what a
+user actually hits in their first five minutes.
+
 ### Close the live-path test blind spot
 
 Almost every source test hand-builds an already-parsed response body and asserts the parser

@@ -9,9 +9,13 @@ Dated history is in [PROGRESS.md](PROGRESS.md); work that needs doing is in [ROA
 
 ## What is true
 
-**The engine is complete and tested.** Twelve entity types, every one with a working orchestrator.
-62 catalogued tools, 45 of them keyless. 1 128 Rust tests and 183 cockpit tests pass; clippy is
-warning-free; the web app typechecks and lints clean.
+**The engine runs and is heavily tested.** Twelve entity types, each with a plan and a working
+orchestrator. 62 catalogued tools, 45 of them keyless. 1 128 Rust tests and 183 cockpit tests
+pass; clippy is warning-free; the web app typechecks and lints clean.
+
+⚠️ *This said "the engine is complete" until 2026-08-30. It is not — see the first entry under
+"What is rough". Individual tools work; what they hand back to the tree does not yet make an
+investigation grow the way the product describes.*
 
 **The whole thing runs.** `cargo run -p ozint-server`, open the port, type a seed, fire. Verified
 on 2026-08-28: the root node is created, the layer starts with its armed-tool count, tools report
@@ -28,6 +32,20 @@ every live layer when engaged.
 ---
 
 ## What is rough
+
+**Findings that should be nodes come back as rows, so the tree stops growing.** This is the
+biggest gap in the product and it was found the obvious way — firing on an email address and
+watching nothing appear. A tool returns `rows` (facts you can read) and `children` (nodes you can
+pursue), and across the catalogue investigable values keep landing in the first. Fire on an email
+and three of the five tools emit no children at all. `wmn-probe` confirms accounts across ~730
+sites and produces neither a row nor a child from any of them. No source anywhere turns a profile
+photo into something you can reverse-image-search, though the tools to do that are built. And
+`entity-video`, one of the twelve advertised types, may not be reachable at all.
+
+Three audits mapped it tool by tool; the findings are in issues #8 through #13, with #8 as the
+umbrella. The fix pattern already exists in the repository — `domain/certspotter.rs` emits capped
+children with an explicit `truncated` flag — so this is mostly a matter of applying it, plus one
+genuine design question about images that #11 lays out.
 
 **The test suite does not test the network.** This is the important one. Almost every source test
 hand-builds an already-parsed response body, so it verifies the parser and not the request. An

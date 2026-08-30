@@ -5,6 +5,65 @@ just which files moved. Current state lives in [STATUS.md](STATUS.md); this file
 
 ---
 
+## 2026-08-30 (evening) — The tree does not grow, and three audits worked out why
+
+The owner fired a layer on his own email address and got no new nodes. That turned out to be the
+largest gap in the product, and not an email-specific one.
+
+**The mechanism.** A tool returns `rows` — facts rendered in the detail panel, which are dead
+ends — and `children`, which become nodes the analyst can fire on. Across the catalogue,
+investigable values keep landing in the first. Firing on an email runs five tools, of which
+`sidecar-holehe`, `sidecar-blackbird-email` and `email-microsoft-credential-type` emit no children
+at all and `email-hudsonrock` emits only an `Ip`. Unless the address happens to carry a Gravatar
+profile, the tree gains nothing — exactly what he saw.
+
+Three read-only audits went through all 62 tools. The scale was worse than the symptom suggested:
+
+- `wmn-probe` checks ~730 sites and puts confirmed hits in neither `rows` nor `children` — they
+  exist only inside a payload the tree does not branch on. 73 real hits, zero nodes.
+- SpiderFoot returns **typed** events (`EMAILADDR`, `IP_ADDRESS`, `DOMAIN_NAME`, `PHONE_NUMBER`)
+  and the Rust side turns the type into a row label and forgets it. The classification we throw
+  away is the classification we would otherwise have to guess.
+- Several tools skip the pivot their own module doc names: `hash-urlhaus` renders malware
+  distribution URLs as rows, `dom-rdap` never extracts the abuse contact that RDAP exists to
+  publish, `ip-virustotal` never requests the relationships that are VT's whole value for an IP.
+- `ip-peeringdb` joins a contact's name, email and phone into one string for display, destroying
+  structure it had already parsed.
+- No source anywhere emits an `Image` child except video keyframes, so a profile photo can never
+  be reverse-image-searched — five separate tools drop an avatar they already hold, and
+  `steam-profile` parses one and never reads it.
+
+**Why nobody noticed.** `sources/username/steam.rs:312-340` asserts `children.is_empty()` and
+never checks that the parsed avatar reaches anything. The test freezes the bug. It is the same
+blind spot as the network one: the suite verifies what the code does rather than what the product
+needs, and a test asserting today's emptiness is not evidence the emptiness is right.
+
+**What the audits refused to call defects, and were right to.** `overpass.rs` argues at length
+that a café 120 m from a coordinate is context and not a lead; `internetdb.rs` refuses to
+attribute a stranger's reverse-DNS records to the subject; Gravatar's hidden accounts,
+HudsonRock's masked credentials and Microsoft's consumer-domain suppression are all deliberate.
+Those reasonings still hold and were left alone.
+
+**The design question that had to be settled first.** The obvious fix — seed an `Image` child
+with the avatar's URL — is wrong, and fails loudly rather than quietly: an `Image` node's value is
+a `media_id`, the SHA-256 of stored bytes, and all three `img-*` tools load it from the store, so
+a URL-valued node's layer fails three times out of three. It would also replace content identity
+with string identity, so the same photograph behind two CDN shards would become two nodes instead
+of one node corroborated twice. What is actually missing is smaller and more specific: `OzRow`
+already has `href` and `media_id` fields and a `Media` section kind that **nothing populates**,
+and there is no route that attaches a node to an existing tree. That is the blocker, not the media
+store.
+
+Recorded as issues #8 through #13, with #8 as the umbrella explaining the pattern and naming
+`domain/certspotter.rs` — capped children with an explicit `truncated` flag — as the template that
+answers the only real objection, which is that a response listing 300 values must not become 300
+nodes.
+
+`STATUS.md` claimed "the engine is complete and tested" until today. It has been corrected in
+place, with the old claim quoted rather than deleted.
+
+---
+
 ## 2026-08-30 (later) — A third audit, and a blocker that no local command could fix
 
 A third reader, told nothing about the first two, found what both had missed — and it was the
