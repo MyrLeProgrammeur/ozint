@@ -257,6 +257,10 @@ And the code, when you want it:
    existing file; the pattern is deliberately boring.
 3. **Take something from [ROADMAP.md](ROADMAP.md).** Items there are scoped to be doable alone.
 
+**There are open issues waiting.** Two are marked `good first issue`; one of them
+([#7](https://github.com/MyrLeProgrammeur/ozint/issues/7)) wants an opinion rather than code and
+is the easiest place to start if you have used tools like this for real.
+
 Ideas, questions and criticism belong in an issue — including half-formed ones, and including
 "why on earth does it do X". Small fixes: just send the pull request. Anything large: open an
 issue first, so we agree on the shape before you spend an evening on it.

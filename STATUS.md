@@ -77,6 +77,25 @@ above for why the suite would not tell you.
 
 ---
 
+## Before this goes public
+
+This repository is still private. Two things must happen at the moment it is flipped, and both
+are settings rather than code — **delete this section once they are done**:
+
+1. **Enable private vulnerability reporting** (Settings → Security). [SECURITY.md](SECURITY.md)
+   tells reporters to use it; the feature is unavailable on private repositories, so the
+   instruction only becomes true at the flip. Its fallback — open an issue with no detail and ask
+   for a contact — covers the gap until then.
+2. **Check the licence and attribution claims survive the flip.** [CREDITS.md](CREDITS.md) states
+   that no third-party code is redistributed here. That is true of this tree, and it was once
+   false of what had been pushed: an encumbered file removed from the working tree remained
+   fetchable from GitHub by its old commit SHA, because a force-push does not delete objects on
+   their side. It was resolved by deleting and recreating the repository. If history is ever
+   rewritten again to remove something, verify with an unauthenticated request to the old commit
+   URL rather than with a local `git` command.
+
+---
+
 ## Provenance of this repository
 
 OZINT was extracted on 2026-08-28 out of a larger private project, where it had been built between
