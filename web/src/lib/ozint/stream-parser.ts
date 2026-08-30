@@ -8,7 +8,6 @@
  * and a demultiplexer (`POST /api/ozint/fire` opens one SSE stream per *investigation*, and
  * several layers can be running at once inside it — see `runtime.rs`'s module doc).
  *
- * Split precedent: `claude-stream-parser.ts` next to this file plays the same client-half
  * role for a code-agent stream.
  *
  * Field-casing note, because it is easy to get wrong by extrapolating from convention

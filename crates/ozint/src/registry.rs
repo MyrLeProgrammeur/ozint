@@ -1573,34 +1573,50 @@ mod tests {
         assert_eq!(tier(AccessTier::DirectoryOnly), 2);
     }
 
-    /// Every source that declares an attribution must be credited in `CREDITS.md`.
+    /// Every source that declares an attribution must have that attribution's **text** in
+    /// `CREDITS.md`.
     ///
-    /// This exists because the obligation was quietly unmet for months. `ToolDef::attribution`
-    /// was declared for fourteen sources and read by nothing — its own doc said the string was
-    /// "rendered in the UI when the licence requires it", and it never reached the UI. Several
-    /// of those licences (WhatsMyName's CC BY-SA 4.0, MaxMind's GeoLite2 terms) require
-    /// attribution as a condition of use, not as a courtesy.
+    /// This exists because the obligation was quietly unmet for months: `ToolDef::attribution`
+    /// was declared for fourteen sources and read by nothing, while several of those licences
+    /// (WhatsMyName's CC BY-SA 4.0, MaxMind's GeoLite2 terms) require attribution as a
+    /// condition of use rather than as a courtesy.
     ///
-    /// A declared-but-unread field cannot be noticed by reading the code, so the fix is a test
-    /// rather than a convention: adding a source with an attribution and forgetting to credit
-    /// it now fails the build. It matches on the tool id rather than the attribution text so
-    /// that rewording a credit line, or formatting it into a table, does not break the check —
-    /// what is being enforced is *that the source is named*, not how.
+    /// It checks the credit line, not the tool id, and the difference is the whole point. An
+    /// earlier version matched on the id alone, which meant a row could keep its id, lose its
+    /// credit text entirely, and still pass — the obligation unmet with a green build. An
+    /// audit demonstrated exactly that, so the check now compares the text itself.
+    ///
+    /// Comparison is deliberately loose about presentation: `CREDITS.md` renders these inside a
+    /// Markdown table and is free to bold part of a licence name, so asterisks, backticks and
+    /// runs of whitespace are normalised away on both sides. What must survive is the wording.
     #[test]
     fn every_declared_attribution_is_credited() {
         const CREDITS: &str = include_str!("../../../CREDITS.md");
 
-        let uncredited: Vec<&str> = CATALOGUE
+        fn normalise(s: &str) -> String {
+            s.chars()
+                .filter(|c| !matches!(c, '*' | '`'))
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        }
+
+        let credits = normalise(CREDITS);
+        let missing: Vec<&str> = CATALOGUE
             .iter()
-            .filter(|tool| tool.attribution.is_some())
+            .filter(|tool| {
+                tool.attribution
+                    .is_some_and(|a| !credits.contains(&normalise(a)))
+            })
             .map(|tool| tool.id)
-            .filter(|id| !CREDITS.contains(*id))
             .collect();
 
         assert!(
-            uncredited.is_empty(),
-            "these sources declare an attribution their licence requires, but are not named in \
-             CREDITS.md: {uncredited:?}"
+            missing.is_empty(),
+            "these sources declare an attribution their licence requires, and its text is not \
+             in CREDITS.md: {missing:?}"
         );
     }
 

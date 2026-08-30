@@ -57,7 +57,7 @@ annotations keep working, because a frozen instance must still be inspectable.
 
 ## Quick start
 
-**Required:** Rust **1.88+** (let-chains, enforced by `rust-version`), Node **20+**, and a C
+**Required:** Rust **1.88+** (let-chains, enforced by `rust-version`), Node **20.19+ or 22.12+**, and a C
 toolchain — SQLite, the image decoders and the QR reader are all compiled from source
 (`build-essential pkg-config libssl-dev` on Debian/Ubuntu).
 

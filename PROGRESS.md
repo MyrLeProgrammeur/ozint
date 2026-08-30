@@ -5,6 +5,43 @@ just which files moved. Current state lives in [STATUS.md](STATUS.md); this file
 
 ---
 
+## 2026-08-30 (later) — A third audit, and a blocker that no local command could fix
+
+A third reader, told nothing about the first two, found what both had missed — and it was the
+same file for the third time, in a place nobody had looked.
+
+**Squashing the history removed the GPLv3 file locally and not from GitHub.** The blob had been
+pushed before the squash, and a force-push does not delete objects on GitHub's side: it only
+stops referencing them. The commit stayed fetchable by its SHA, and so did the file — confirmed
+by asking GitHub's API for it, which returned all 16 905 bytes. The earlier claim that the blob
+was "gone", verified only against the local object store, was therefore wrong about the thing
+that actually mattered. Two statements in the repository were false as published rather than as
+written: `CREDITS.md`'s "none of it is redistributed by this repository", and the patch script's
+"leaves this repository holding only its own thirty lines". Fixed by deleting the GitHub
+repository and recreating it, which is the only action that reaches those objects.
+
+**The attribution test could pass while the obligation went unmet.** It matched on the tool id,
+so a credit row could keep its id, lose its text entirely, and stay green — demonstrated by the
+auditor, then reproduced here before and after the fix. It now compares the attribution text,
+normalising away Markdown emphasis and whitespace so the table may format a licence name without
+breaking the check. Blanking a credit line now fails the build, which is what the README already
+claimed the test did.
+
+**Node 20+ was too loose.** Vite 8 requires `^20.19.0 || >=22.12.0`, so anyone on 20.0–20.18
+would have failed on the README's first command.
+
+Also: a `SECURITY.md` with a real reporting route and an explicit scope — the absence of
+authentication is a deliberate design fact, not a vulnerability, and saying so up front saves
+everyone a report. Two remaining comments describing files that exist only in the private parent
+project are gone.
+
+What the audit found and this round did **not** change: the hero screenshot is still a raw
+viewport grab with cards sliced at the edges, still leads with the product's failure states, and
+still shows the empty-card problem `STATUS.md` admits to. That is fair, and it is now the top
+item in the roadmap's documentation section rather than something quietly hoped over.
+
+---
+
 ## 2026-08-30 — A second audit, and what CI found in its first minute
 
 The repository was audited again, by someone told nothing about the first round and instructed to

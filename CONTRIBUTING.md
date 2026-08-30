@@ -22,7 +22,7 @@ says more about that; this file covers the mechanics.
 
 ## Setting up
 
-Rust **1.88+**, Node **20+**, and a C toolchain (`build-essential pkg-config libssl-dev` on
+Rust **1.88+**, Node **20.19+ or 22.12+**, and a C toolchain (`build-essential pkg-config libssl-dev` on
 Debian/Ubuntu) — SQLite, the image decoders and the QR reader all compile from source. `ffmpeg`,
 `ffprobe`, `yt-dlp` and Docker are needed only by the tools that shell out to them; see the
 README's table. Nothing you need to develop requires an API key.
@@ -124,7 +124,7 @@ enforced.
 
 If you find something with a security impact — an SSRF bypass, a way to make the tool leak the
 analyst's seed to an unintended party, a path traversal in the media store — please do not open a
-public issue. Report it privately through GitHub's security advisory form on this repository.
+public issue. [SECURITY.md](SECURITY.md) has the reporting route and what is in and out of scope.
 
 ## Licence
 

@@ -15,7 +15,7 @@ makes sense in that context, it is a leftover — fix it.
 
 ## Run it
 
-Rust **1.88+** (let-chains, enforced by `rust-version`), Node **20+**, a C toolchain. `ffmpeg`,
+Rust **1.88+** (let-chains, enforced by `rust-version`), Node **20.19+ or 22.12+**, a C toolchain. `ffmpeg`,
 `ffprobe`, `yt-dlp` and Docker are optional and only gate the tools that shell out to them.
 
 ```bash

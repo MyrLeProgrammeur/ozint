@@ -170,6 +170,12 @@ biggest barrier to a first-time user right now.
 
 ## Documentation
 
+- **Reshoot the hero screenshot.** The current one is an honest viewport grab and reads like it:
+  cards sliced mid-word at both edges, most of the frame given to failure states and to cards
+  that are ~85% empty. A username fan-out with populated cards, framed so nothing is cut, and
+  ideally with one key set so the summary band says something, would sell the tool instead of
+  apologising for it. Fixing the card-density problem first (see [STATUS.md](STATUS.md)) would
+  make this much easier.
 - **A worked investigation walkthrough** — one real seed, followed through four layers, showing
   what the tool is actually for. The README now has two screenshots of a single layer; what is
   missing is the thing they cannot show, which is judgement: why you followed *that* child and

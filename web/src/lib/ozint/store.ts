@@ -27,7 +27,6 @@ import type { OzTypeName } from "./tokens";
  * `state.ts` owns the reduction and knows nothing about the network; this is the
  * thin shell around it — one `fetch` against `POST /api/ozint/fire`, the
  * incremental frame reader, and the `useSyncExternalStore` subscription the
- * views read. Precedent: `src/lib/store/agentTelemetryStore.ts`.
  *
  * One connection at a time. `POST /api/ozint/fire` multiplexes every layer of
  * an investigation onto a single SSE stream, so continuing a second node while
