@@ -42,7 +42,21 @@
 //! posture, and inventing one to be filled by a single source would put a second writer next
 //! to `ip-ipinfo`'s `isp` under the shallow last-writer-wins merge this module's siblings
 //! already document. Its whole contribution is rows — one detail section owned by this tool —
-//! plus the operator's own website as a `Domain` child.
+//! plus the operator's own website as a `Domain` child, and (see below) the published points of
+//! contact as `Email`/`Phone` children.
+//!
+//! ## Contact children
+//!
+//! `poc_set` entries were, until now, joined into a single `" · ")`-separated row and nothing
+//! else — the parsed `email`/`phone` fields existed for one call and were then discarded. They
+//! are structured data the moment PeeringDB returns them; throwing that away on the way to the
+//! screen means a later pass that wants them back has to re-parse the rendered string instead
+//! of reading the response. [`build_contact_children`] reads the same already-parsed `email`/
+//! `phone` fields the display row uses and turns each into its own child, capped at
+//! [`MAX_CONTACTS`] (same pattern as `dom-certspotter`'s `MAX_SUBDOMAIN_CHILDREN`: a network
+//! the size of Google's carries dozens of `poc_set` entries, and spawning a child per one would
+//! flood the graph far past what a peering contact list is worth pivoting on). The existing
+//! per-contact row is unchanged — this is additive, not a redesign of the display.
 
 use crate::fetch::{OzBody, OzFetchOptions, OzOutcome};
 use crate::outcome::ToolOutcome;
@@ -51,6 +65,11 @@ use crate::sources::{DispatchOutcome, ToolCtx};
 use crate::types::{OzRow, OzType};
 
 const PEERINGDB_NET: &str = "https://www.peeringdb.com/api/net?asn=";
+
+/// The most `poc_set` contacts turned into `Email`/`Phone` children per lookup. See the module
+/// doc's "Contact children" — a large network's contact list is not something worth pivoting on
+/// in full, and this caps the graph fan-out the same way `dom-certspotter` caps subdomains.
+const MAX_CONTACTS: usize = 5;
 
 fn body_to_json(body: &OzBody) -> Result<serde_json::Value, String> {
     match body {
@@ -94,6 +113,22 @@ struct NetResult {
     /// The operator's own website, as a domain pivot. Taken from the record, never derived
     /// from the network name.
     website_host: Option<String>,
+    /// `poc_set` emails and phones, in the order encountered, before the [`MAX_CONTACTS`] cap —
+    /// see [`build_contact_children`].
+    contacts: Vec<ContactChild>,
+    /// Set when more contacts carried an email or phone than [`MAX_CONTACTS`] kept — same
+    /// two-cause convention as `dom-certspotter`'s `truncated`, except this tool has no
+    /// payload field to carry it, so [`net_to_yield`] renders it as an extra row instead.
+    contacts_truncated: bool,
+}
+
+/// One `poc_set` contact detail worth pivoting on, carrying enough to build both the
+/// `ChildSeed` and its note.
+#[derive(Debug, Clone, PartialEq)]
+struct ContactChild {
+    oz_type: OzType,
+    value: String,
+    role: Option<String>,
 }
 
 impl NetResult {
@@ -187,6 +222,7 @@ fn parse_net(json: &serde_json::Value, asn: &str) -> Result<NetResult, String> {
     // tool used to drop entirely. `poc_set` entries carry `role`, `visible`, `name`, `phone`,
     // `email`, `url`; the API already scopes the response to what the requester may see, so
     // every entry present here is rendered rather than re-filtered on `visible`.
+    let mut contacts = Vec::new();
     if let Some(pocs) = net.get("poc_set").and_then(serde_json::Value::as_array) {
         for poc in pocs {
             let Some(poc) = poc.as_object() else { continue };
@@ -230,8 +266,28 @@ fn parse_net(json: &serde_json::Value, asn: &str) -> Result<NetResult, String> {
                 href: url,
                 ..Default::default()
             });
+
+            // The same already-parsed `email`/`phone` the row above just joined into a string —
+            // read here from the original fields, not by re-splitting `parts`, so nothing here
+            // depends on the display's separator or ordering.
+            if let Some(email) = &email {
+                contacts.push(ContactChild {
+                    oz_type: OzType::Email,
+                    value: email.clone(),
+                    role: role.clone(),
+                });
+            }
+            if let Some(phone) = &phone {
+                contacts.push(ContactChild {
+                    oz_type: OzType::Phone,
+                    value: phone.clone(),
+                    role: role.clone(),
+                });
+            }
         }
     }
+    let contacts_truncated = contacts.len() > MAX_CONTACTS;
+    contacts.truncate(MAX_CONTACTS);
 
     // The record itself, so the analyst can read the operator's peering contacts and notes by
     // hand rather than have this tool relay a free-text block.
@@ -247,23 +303,47 @@ fn parse_net(json: &serde_json::Value, asn: &str) -> Result<NetResult, String> {
     Ok(NetResult {
         rows,
         website_host: text("website").as_deref().and_then(website_host),
+        contacts,
+        contacts_truncated,
     })
 }
 
 fn net_to_yield(result: &NetResult) -> ToolYield {
+    let mut rows = result.rows.clone();
+    if result.contacts_truncated {
+        // No payload field exists to carry a `truncated` flag (see the module doc's "Field
+        // ownership"), so the signal is a row instead — same "only when true" convention as
+        // `dom-certspotter`'s `subdomainsTruncated`, just rendered rather than merged.
+        rows.push(OzRow {
+            label: "Contacts".into(),
+            value: format!("only the first {MAX_CONTACTS} contacts became pivotable nodes"),
+            ..Default::default()
+        });
+    }
+
+    let mut children: Vec<ChildSeed> = result
+        .website_host
+        .iter()
+        .map(|host| ChildSeed {
+            oz_type: OzType::Domain,
+            value: host.clone(),
+            note: Some("the network operator's own website, from its PeeringDB record".into()),
+        })
+        .collect();
+    children.extend(result.contacts.iter().map(|contact| ChildSeed {
+        oz_type: contact.oz_type,
+        value: contact.value.clone(),
+        note: Some(match &contact.role {
+            Some(role) => format!("published PeeringDB point of contact ({role})"),
+            None => "published PeeringDB point of contact".to_string(),
+        }),
+    }));
+
     ToolYield {
         // No payload key — see the module doc's "Field ownership".
         payload_patch: serde_json::json!({}),
-        rows: result.rows.clone(),
-        children: result
-            .website_host
-            .iter()
-            .map(|host| ChildSeed {
-                oz_type: OzType::Domain,
-                value: host.clone(),
-                note: Some("the network operator's own website, from its PeeringDB record".into()),
-            })
-            .collect(),
+        rows,
+        children,
         ..Default::default()
     }
 }
@@ -414,9 +494,107 @@ mod tests {
             "PeeringDB owns no IpPayload field — a second writer next to ip-ipinfo's `isp` \
              would be silently resolved by the shallow merge"
         );
-        assert_eq!(produced.children.len(), 1);
-        assert_eq!(produced.children[0].oz_type, OzType::Domain);
-        assert_eq!(produced.children[0].value, "about.google");
+        let domain_children: Vec<_> = produced
+            .children
+            .iter()
+            .filter(|c| c.oz_type == OzType::Domain)
+            .collect();
+        assert_eq!(domain_children.len(), 1);
+        assert_eq!(domain_children[0].value, "about.google");
+    }
+
+    #[test]
+    fn poc_set_email_and_phone_become_typed_children_from_the_parsed_fields_not_the_row() {
+        // Google's poc_set has two contacts: NOC (email + phone) and Policy (email only, the
+        // blank phone field must not become a child). Read from the original `email`/`phone`
+        // fields, so this must hold independent of how the row above joins them.
+        let result = parse_net(&google_net(), "15169").unwrap();
+        let produced = net_to_yield(&result);
+
+        let emails: Vec<&str> = produced
+            .children
+            .iter()
+            .filter(|c| c.oz_type == OzType::Email)
+            .map(|c| c.value.as_str())
+            .collect();
+        assert_eq!(emails, vec!["noc@google.com", "peering@google.com"]);
+
+        let phones: Vec<&str> = produced
+            .children
+            .iter()
+            .filter(|c| c.oz_type == OzType::Phone)
+            .map(|c| c.value.as_str())
+            .collect();
+        assert_eq!(
+            phones,
+            vec!["+1-650-253-0000"],
+            "the blank phone on the Policy contact must not become a child"
+        );
+
+        for child in produced
+            .children
+            .iter()
+            .filter(|c| c.oz_type == OzType::Email || c.oz_type == OzType::Phone)
+        {
+            assert!(
+                child.note.as_deref().unwrap().contains("point of contact"),
+                "{:?}",
+                child
+            );
+        }
+    }
+
+    #[test]
+    fn more_than_max_contacts_is_capped_and_signalled_by_a_row() {
+        // No payload field exists to carry a truncated flag (this tool writes none — see the
+        // module doc), so the signal has to be a row instead of a patch key.
+        let pocs: Vec<serde_json::Value> = (0..(MAX_CONTACTS + 3))
+            .map(|i| {
+                serde_json::json!({
+                    "role": "NOC",
+                    "name": format!("Contact {i}"),
+                    "email": format!("contact{i}@example.com"),
+                    "phone": "",
+                    "url": ""
+                })
+            })
+            .collect();
+        let json = serde_json::json!({
+            "data": [{ "id": 1, "name": "Big Network", "poc_set": pocs }]
+        });
+        let result = parse_net(&json, "1").unwrap();
+        assert_eq!(result.contacts.len(), MAX_CONTACTS);
+        assert!(result.contacts_truncated);
+
+        let produced = net_to_yield(&result);
+        let email_children = produced
+            .children
+            .iter()
+            .filter(|c| c.oz_type == OzType::Email)
+            .count();
+        assert_eq!(email_children, MAX_CONTACTS);
+        assert!(
+            produced.rows.iter().any(|r| r.label == "Contacts"),
+            "a truncation row must be present"
+        );
+        // The per-contact rows themselves are unaffected by the cap — only the children are
+        // capped, since rows were never the thing generating fan-out.
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .filter(|r| r.label.starts_with("Contact ("))
+                .count(),
+            MAX_CONTACTS + 3
+        );
+    }
+
+    #[test]
+    fn at_or_under_max_contacts_no_truncation_row_appears() {
+        let result = parse_net(&google_net(), "15169").unwrap();
+        assert!(!result.contacts_truncated);
+        let produced = net_to_yield(&result);
+        assert!(!produced.rows.iter().any(|r| r.label == "Contacts"));
     }
 
     #[test]

@@ -7,6 +7,28 @@
 //! Everything here except [`run_wmn_probe`] and `probe_one_site` is pure and tested against
 //! inline fixtures; those two make real network calls and are deliberately kept thin, per
 //! this crate's convention (see `fetch.rs`'s module doc).
+//!
+//! ## Rows, added alongside the payload
+//!
+//! Until this pass, a confirmed hit only ever reached `payload_patch["hits"]` — invisible in
+//! the detail panel, reachable only by an analyst who thinks to inspect the raw payload. Every
+//! confirmed [`SiteHit`] now also becomes an [`OzRow`] (uncapped — there is no reason to hide
+//! any of a ~730-site sweep's real findings from the one view that actually renders per-hit
+//! detail).
+//!
+//! ## Why a confirmed hit does NOT become a child — read this before "fixing" it
+//!
+//! A confirmed hit was briefly turned into an `OzType::Username` `ChildSeed` carrying the
+//! queried handle itself (the site being confirmed doesn't change *which* identity was found —
+//! WhatsMyName confirms one identity across many sites, not many identities). That value is
+//! always already the node this tool's own layer is running against, so
+//! `runtime::emit_child`'s dedup-before-persist step (`runtime.rs:444-458`: it computes the
+//! seed's dedup key and checks the visited set *before* ever building a node) can never treat
+//! it as new — it only ever produces a corroboration record on the very node already under
+//! investigation. No `OzType` in this crate carries a per-platform profile URL as its identity
+//! (all twelve are identities, not locations), so there is no sound child value a site-list
+//! sweep like this one could seed instead. The children were removed once this was confirmed;
+//! the row list above is where a confirmed hit's information actually belongs.
 
 use tokio::sync::Semaphore;
 
@@ -15,7 +37,7 @@ use crate::layer_plan::FACT_CONFIRMED_SITES;
 use crate::outcome::ToolOutcome;
 use crate::registry::ToolYield;
 use crate::sources::DispatchOutcome;
-use crate::types::{SiteHit, SiteHitStatus, UsernamePayload};
+use crate::types::{OzRow, SiteHit, SiteHitStatus, UsernamePayload};
 
 const WMN_DATASET_URL: &str =
     "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json";
@@ -199,6 +221,20 @@ async fn probe_one_site(site: &WmnSite, handle: &str, cancel: Option<CancelSigna
     }
 }
 
+/// Turns every confirmed hit in `hits` into a row. Uncapped — see the module doc for why this
+/// is the only thing a confirmed hit becomes (no children). Pure and tested.
+fn confirmed_hits_to_rows(hits: &[SiteHit]) -> Vec<OzRow> {
+    hits.iter()
+        .filter(|h| h.status == SiteHitStatus::Confirmed)
+        .map(|hit| OzRow {
+            label: hit.site.clone(),
+            value: "account registered".to_string(),
+            href: Some(hit.url.clone()),
+            ..Default::default()
+        })
+        .collect()
+}
+
 /// Fans a handle out across the WhatsMyName site list. **Counts as ONE lookup**, not ~730 —
 /// the lookup meter treats this fan-out as a single logical tool
 /// invocation, and this function's single [`DispatchOutcome`] return reflects that: the
@@ -297,6 +333,7 @@ pub async fn run_wmn_probe(handle: &str, ctx: &crate::sources::ToolCtx) -> Dispa
         .iter()
         .filter(|h| h.status == SiteHitStatus::Confirmed)
         .count() as u32;
+    let rows = confirmed_hits_to_rows(&hits);
 
     let payload = UsernamePayload {
         hits,
@@ -316,7 +353,7 @@ pub async fn run_wmn_probe(handle: &str, ctx: &crate::sources::ToolCtx) -> Dispa
 
     let produced = ToolYield {
         payload_patch,
-        rows: Vec::new(),
+        rows,
         facts: vec![(FACT_CONFIRMED_SITES, sites_confirmed as f64)],
         flags: Vec::new(),
         values: Vec::new(),
@@ -505,5 +542,54 @@ mod tests {
             m_string: None,
         });
         assert_eq!(status, SiteHitStatus::Possible);
+    }
+
+    // ── rows ─────────────────────────────────────────────────────────────
+
+    fn hit(site: &str, status: SiteHitStatus) -> SiteHit {
+        SiteHit {
+            site: site.to_string(),
+            category: None,
+            url: format!("https://{}.example/handle", site.to_ascii_lowercase()),
+            status,
+        }
+    }
+
+    #[test]
+    fn a_confirmed_hit_becomes_a_row() {
+        let hits = vec![
+            hit("GitHub", SiteHitStatus::Confirmed),
+            hit("Reddit", SiteHitStatus::Absent),
+        ];
+        let rows = confirmed_hits_to_rows(&hits);
+        assert_eq!(rows.len(), 1, "only the confirmed hit produces a row");
+        assert_eq!(rows[0].label, "GitHub");
+        assert_eq!(
+            rows[0].href.as_deref(),
+            Some("https://github.example/handle")
+        );
+    }
+
+    #[test]
+    fn possible_and_absent_and_error_hits_produce_no_row() {
+        let hits = vec![
+            hit("A", SiteHitStatus::Possible),
+            hit("B", SiteHitStatus::Absent),
+            hit("C", SiteHitStatus::Error),
+        ];
+        assert!(confirmed_hits_to_rows(&hits).is_empty());
+    }
+
+    #[test]
+    fn every_confirmed_hit_gets_a_row_uncapped() {
+        let hits: Vec<SiteHit> = (0..50)
+            .map(|i| hit(&format!("site{i:03}"), SiteHitStatus::Confirmed))
+            .collect();
+        let rows = confirmed_hits_to_rows(&hits);
+        assert_eq!(
+            rows.len(),
+            hits.len(),
+            "rows are never capped, unlike the children this tool briefly emitted"
+        );
     }
 }

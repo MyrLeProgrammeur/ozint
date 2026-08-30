@@ -38,13 +38,24 @@
 //! rather than an error, per this crate's "empty is a finding, never a disguised failure"
 //! doctrine.
 //!
-//! ## Why this writes only `rows`, never a payload field
+//! ## Why this writes only `rows`, never a payload field or a child
 //!
 //! Same reasoning as `sidecar-maigret`'s module doc: `UsernamePayload.hits` belongs to
 //! `wmn-probe` alone, and `EmailPayload` has no "accounts" field to begin with. Every confirmed
 //! site becomes an [`OzRow`]; a site with metadata gets one extra row per extracted field,
 //! labelled `<site> · <field name>`, landing in the node's detail rows alongside every other
 //! row-only tool in this crate.
+//!
+//! Confirmed hits were briefly also turned into `OzType::Username` `ChildSeed`s carrying the
+//! queried handle itself — read `wmn.rs`'s module doc for the full reasoning shared by all
+//! three site-list sweeps in this crate (`wmn.rs`, this file, `maigret.rs`). In short: Blackbird
+//! confirms one identity across many sites, not many identities, so a same-value child always
+//! dedups against the node the layer is already running on (`runtime::emit_child`'s
+//! dedup-before-persist step, `runtime.rs:444-458`) and can only ever add a corroboration
+//! record there, never a new node — and no `OzType` in this crate carries a per-platform
+//! profile URL as its identity, so there is no sound value a child could carry instead. The
+//! children were removed once this was confirmed; the row list above is where a confirmed
+//! hit's information actually belongs.
 
 use std::time::Duration;
 

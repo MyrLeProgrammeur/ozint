@@ -42,6 +42,30 @@ is the thing I most want described to me.
 keyless tools that number is almost always zero, and I am not sure the meter earns its place
 rather than implying a paid product that does not exist.
 
+**Should any row be promotable to a node, instead of each tool deciding?** The child-emission
+audit catalogued dozens of "this value should have been a node" cases, and the current answer
+fixes them one tool at a time. The alternative is one mechanism: the analyst promotes a row
+carrying a recognisable value themselves. That puts the judgement where the judgement lives and
+removes the need to guess in advance which of 730 confirmed accounts matters — at the cost of
+making the tree depend on clicking, so a value nobody promotes is a value nobody sees again.
+
+**Should the cap live in the engine or in the rendering?** `domain/certspotter.rs` caps children
+in the tool and flags `truncated`, and every fix follows it. But a username sweep can confirm 73
+real accounts, and capping at ten discards sixty-three findings the tool actually made. The other
+model is that everything becomes a node and the tree collapses siblings visually — the same work
+as virtualising it. Is the cap protecting the analyst from noise, or protecting the renderer from
+its own limits? If the second, it is in the wrong place.
+
+**Should the media store forget anything?** It has no eviction, no garbage collection and no
+enumeration. That last is why `img-phash` cannot compare an image against others already stored,
+which is most of what a perceptual hash is for. Should an investigation's media be deletable with
+it, and what does an analyst expect "delete this investigation" to mean?
+
+**Is `entity-video` worth keeping as a type?** Nothing emits a `Video` child, and the cockpit has
+no media UI, so the only way in appears to be forcing the type onto a value the analyst already
+knows is an internal media id. Either something should create video nodes, or it is upload-only
+and should say so, or it should go.
+
 ---
 
 ## The most valuable thing anyone could do

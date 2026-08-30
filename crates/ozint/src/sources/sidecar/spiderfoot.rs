@@ -81,13 +81,30 @@
 //! `dir-tiles-entity`: SpiderFoot's `targetTypeFromString` already tells a domain from an IP
 //! from the string alone, so there is nothing type-specific for this crate to special-case —
 //! [`run_spiderfoot`] takes the value as-is and lets the sidecar classify it.
+//!
+//! ## Children: an explicit allowlist, not a shape-guessing fallback
+//!
+//! `scaneventresultsunique` rows are heterogeneous by nature — SpiderFoot's real event
+//! vocabulary spans dozens of typed events, most of which this crate has never looked at
+//! against a live scan. [`CHILDABLE_EVENT_TYPES`] promotes only the four this issue confirmed
+//! against `OzType`'s own catalogue (`EMAILADDR`, `IP_ADDRESS`, `DOMAIN_NAME`,
+//! `PHONE_NUMBER`); anything else — `IPV6_ADDRESS`, the `AFFILIATE_*` family (a co-hosted or
+//! related value, not the subject itself), `EMAILADDR_GENERIC`, `PHONE_NUMBER_TYPE`, `NETBLOCK*`,
+//! and the rest of SpiderFoot's module output — keeps its current row-only behaviour. Typing an
+//! unreviewed value into an `OzType` this crate then treats as first-class (spawning its own
+//! orchestrator, its own children, its own dossier entry) is a stronger claim than "SpiderFoot
+//! reported this string," and nothing in this file has evidence for that stronger claim beyond
+//! the four types the issue itself names. Extend the allowlist only against the same kind of
+//! evidence — a value actually seen from a real scan or sidecar test, not a guess from the
+//! module name.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::outcome::ToolOutcome;
-use crate::registry::ToolYield;
+use crate::registry::{ChildSeed, ToolYield};
 use crate::sources::DispatchOutcome;
-use crate::types::OzRow;
+use crate::types::{OzRow, OzType};
 
 const DEFAULT_BASE_URL: &str = "http://localhost:5001";
 
@@ -99,6 +116,83 @@ const POLL_BUDGET: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 const TERMINAL_STATUSES: &[&str] = &["FINISHED", "ABORTED", "ERROR-FAILED"];
+
+/// SpiderFoot event types promoted to `OzType` children. See the module doc's "an explicit
+/// allowlist" for why this list is short and deliberately not extended by guessing.
+const CHILDABLE_EVENT_TYPES: &[(&str, OzType)] = &[
+    ("EMAILADDR", OzType::Email),
+    ("IP_ADDRESS", OzType::Ip),
+    ("DOMAIN_NAME", OzType::Domain),
+    ("PHONE_NUMBER", OzType::Phone),
+];
+
+/// Per-`OzType` cap on children spawned from one SpiderFoot sweep, applied after
+/// case-insensitive dedup. A `Passive` scan runs on the order of a hundred modules against a
+/// single target and a domain sweep alone can return far more unique names than a subject file
+/// should grow in one refresh; capping **per type** (not with one shared budget) is what stops
+/// a flood of `DOMAIN_NAME` rows from crowding out the one `EMAILADDR` or `PHONE_NUMBER` a scan
+/// also found. Matches [`crate::types::MAX_SUBDOMAIN_CHILDREN`]'s number — this file doesn't own
+/// `types.rs` so it keeps its own constant, but there's no reason to pick a different number
+/// than the rest of the crate already treats as reasonable for one tool's fan-out.
+const MAX_CHILDREN_PER_TYPE: usize = 20;
+
+/// Builds capped, deduplicated children from the raw `scaneventresultsunique` array (not from
+/// the already-formatted [`OzRow`]s — a row's value carries a `(\u{d7}N)` count suffix once
+/// `count > 1`, which must never leak into a child's value). Returns the children alongside one
+/// truncation note per type that was actually cut, so an analyst pursuing a spawned child knows
+/// the list wasn't exhaustive — same principle as `certspotter::build_subdomains_result`'s
+/// `truncated` flag, but surfaced as a row here rather than a payload-patch field: this tool's
+/// findings are heterogeneous by design (see `yield_never_writes_a_payload_patch`) and has no
+/// single payload field a truncation flag could honestly own.
+fn build_children(raw_rows: &[serde_json::Value]) -> (Vec<ChildSeed>, Vec<OzRow>) {
+    let mut children = Vec::new();
+    let mut truncation_notes = Vec::new();
+
+    for (event_type, oz_type) in CHILDABLE_EVENT_TYPES {
+        let mut values: Vec<String> = raw_rows
+            .iter()
+            .filter_map(|row| {
+                let arr = row.as_array()?;
+                let data = arr.first()?.as_str()?;
+                let row_type = arr.get(1)?.as_str()?;
+                (row_type == *event_type).then(|| data.to_string())
+            })
+            .collect();
+
+        // Case-insensitive dedup: SpiderFoot's own module set frequently rediscovers the same
+        // value from several independent modules within one scan, and an unstable/duplicated
+        // child list would make a routine refresh look like new findings when nothing changed.
+        let mut seen = HashSet::new();
+        values.retain(|v| seen.insert(v.to_ascii_lowercase()));
+
+        if values.is_empty() {
+            continue;
+        }
+
+        let truncated = values.len() > MAX_CHILDREN_PER_TYPE;
+        values.truncate(MAX_CHILDREN_PER_TYPE);
+
+        if truncated {
+            truncation_notes.push(OzRow {
+                label: format!("{event_type} (SpiderFoot)"),
+                value: format!(
+                    "more than {MAX_CHILDREN_PER_TYPE} unique values found — only the first {MAX_CHILDREN_PER_TYPE} became children"
+                ),
+                ..Default::default()
+            });
+        }
+
+        for value in values {
+            children.push(ChildSeed {
+                oz_type: *oz_type,
+                value,
+                note: Some("found via a passive SpiderFoot sweep".to_string()),
+            });
+        }
+    }
+
+    (children, truncation_notes)
+}
 
 /// One `[data, type, count]` row from `scaneventresultsunique`.
 fn parse_unique_row(row: &serde_json::Value) -> Option<OzRow> {
@@ -117,8 +211,17 @@ fn parse_unique_row(row: &serde_json::Value) -> Option<OzRow> {
     })
 }
 
-fn results_to_yield(rows: Vec<OzRow>, truncated: bool) -> ToolYield {
+fn results_to_yield(
+    rows: Vec<OzRow>,
+    truncated: bool,
+    children: Vec<ChildSeed>,
+    child_truncation_notes: Vec<OzRow>,
+) -> ToolYield {
     let mut rows = rows;
+    // The "so far" count below must reflect genuine findings only, computed before either kind
+    // of note is appended — a truncation notice is metadata about the findings, not a finding
+    // itself, and must not inflate the count the analyst sees, same reasoning as why neither
+    // note inflates the caller's `OkWithResults { count }`.
     if truncated {
         rows.push(OzRow {
             label: "SpiderFoot sweep".to_string(),
@@ -131,8 +234,10 @@ fn results_to_yield(rows: Vec<OzRow>, truncated: bool) -> ToolYield {
             ..Default::default()
         });
     }
+    rows.extend(child_truncation_notes);
     ToolYield {
         rows,
+        children,
         ..Default::default()
     }
 }
@@ -152,19 +257,23 @@ async fn stop_scan(base: &str, scan_id: &str) {
     .await;
 }
 
-async fn fetch_unique_results(base: &str, scan_id: &str) -> Result<Vec<OzRow>, ToolOutcome> {
+type FetchedResults = (Vec<OzRow>, Vec<ChildSeed>, Vec<OzRow>);
+
+async fn fetch_unique_results(base: &str, scan_id: &str) -> Result<FetchedResults, ToolOutcome> {
     let url = format!(
         "{base}/scaneventresultsunique?id={}&eventType=ALL",
         urlencoding::encode(scan_id)
     );
     let json =
         super::sidecar_request(reqwest::Method::GET, &url, None, Duration::from_secs(15)).await?;
-    let Some(rows) = json.as_array() else {
+    let Some(raw_rows) = json.as_array() else {
         return Err(ToolOutcome::ParseError {
             message: "SpiderFoot's scaneventresultsunique did not return a JSON array".to_string(),
         });
     };
-    Ok(rows.iter().filter_map(parse_unique_row).collect())
+    let rows = raw_rows.iter().filter_map(parse_unique_row).collect();
+    let (children, child_truncation_notes) = build_children(raw_rows);
+    Ok((rows, children, child_truncation_notes))
 }
 
 /// Runs `sidecar-spiderfoot` against `value` (a domain or an IP — SpiderFoot classifies it).
@@ -272,13 +381,14 @@ pub async fn run_spiderfoot(value: &str, ctx: &crate::sources::ToolCtx) -> Dispa
         .await;
     }
 
-    let rows = match fetch_unique_results(&base, &scan_id).await {
-        Ok(rows) => rows,
+    let (rows, children, child_truncation_notes) = match fetch_unique_results(&base, &scan_id).await
+    {
+        Ok(fetched) => fetched,
         Err(outcome) => return DispatchOutcome::Ran(outcome, None),
     };
 
     let count = rows.len() as u32;
-    let produced = results_to_yield(rows, !terminal);
+    let produced = results_to_yield(rows, !terminal, children, child_truncation_notes);
     if count == 0 {
         DispatchOutcome::Ran(ToolOutcome::OkEmpty, Some(produced))
     } else {
@@ -318,10 +428,10 @@ mod tests {
             value: "1.2.3.4".to_string(),
             ..Default::default()
         }];
-        let terminal = results_to_yield(rows.clone(), false);
+        let terminal = results_to_yield(rows.clone(), false, vec![], vec![]);
         assert_eq!(terminal.rows.len(), 1);
 
-        let truncated = results_to_yield(rows, true);
+        let truncated = results_to_yield(rows, true, vec![], vec![]);
         assert_eq!(truncated.rows.len(), 2);
         assert!(
             truncated
@@ -337,9 +447,140 @@ mod tests {
     fn yield_never_writes_a_payload_patch() {
         // Same reasoning as `sidecar::maigret`: this tool's findings are heterogeneous
         // (any SpiderFoot event type), so there is no single `DomainPayload`/`IpPayload`
-        // field they could honestly own — they surface as rows only.
-        let produced = results_to_yield(vec![], false);
+        // field they could honestly own — they surface as rows only. This still holds now
+        // that some rows also spawn children: children ride `ToolYield::children`, never the
+        // payload patch.
+        let produced = results_to_yield(vec![], false, vec![], vec![]);
         assert_eq!(produced.payload_patch, serde_json::json!({}));
+    }
+
+    #[test]
+    fn yield_carries_the_children_it_was_given() {
+        let children = vec![ChildSeed {
+            oz_type: OzType::Email,
+            value: "mail@example.com".to_string(),
+            note: Some("found via a passive SpiderFoot sweep".to_string()),
+        }];
+        let produced = results_to_yield(vec![], false, children.clone(), vec![]);
+        assert_eq!(produced.children, children);
+    }
+
+    // ── build_children: the allowlist ───────────────────────────────────
+
+    #[test]
+    fn allowlisted_event_types_become_children_of_the_matching_oz_type() {
+        let raw = serde_json::json!([
+            ["mail@example.com", "EMAILADDR", 1],
+            ["1.2.3.4", "IP_ADDRESS", 1],
+            ["sub.example.com", "DOMAIN_NAME", 1],
+            ["+15555550100", "PHONE_NUMBER", 1],
+        ]);
+        let (children, notes) = build_children(raw.as_array().unwrap());
+        assert!(notes.is_empty());
+        let by_type: Vec<(OzType, &str)> = children
+            .iter()
+            .map(|c| (c.oz_type, c.value.as_str()))
+            .collect();
+        assert_eq!(
+            by_type,
+            vec![
+                (OzType::Email, "mail@example.com"),
+                (OzType::Ip, "1.2.3.4"),
+                (OzType::Domain, "sub.example.com"),
+                (OzType::Phone, "+15555550100"),
+            ]
+        );
+        for child in &children {
+            assert!(child.note.is_some());
+        }
+    }
+
+    #[test]
+    fn an_event_type_outside_the_allowlist_produces_no_child() {
+        // AFFILIATE_IPADDR points at a related-but-distinct subject (a co-hosted or affiliated
+        // address, not the target itself) — exactly the kind of value the module doc says must
+        // not be typed on guesswork. It must keep row-only behaviour.
+        let raw = serde_json::json!([["9.9.9.9", "AFFILIATE_IPADDR", 1]]);
+        let (children, notes) = build_children(raw.as_array().unwrap());
+        assert!(children.is_empty());
+        assert!(notes.is_empty());
+        // And the row path is untouched: it still parses as a plain, labelled row.
+        let row = parse_unique_row(&raw[0]).expect("still a valid row");
+        assert_eq!(row.label, "AFFILIATE_IPADDR");
+    }
+
+    #[test]
+    fn a_child_value_never_carries_the_row_formatting_count_suffix() {
+        // parse_unique_row would format this as "1.2.3.4 (×3)" for the row; a child must carry
+        // the bare value, since a downstream orchestrator dispatches on it verbatim.
+        let raw = serde_json::json!([["1.2.3.4", "IP_ADDRESS", 3]]);
+        let (children, _) = build_children(raw.as_array().unwrap());
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].value, "1.2.3.4");
+    }
+
+    #[test]
+    fn duplicate_values_for_the_same_type_are_deduplicated_case_insensitively() {
+        let raw = serde_json::json!([
+            ["Mail@Example.com", "EMAILADDR", 1],
+            ["mail@example.com", "EMAILADDR", 1],
+        ]);
+        let (children, _) = build_children(raw.as_array().unwrap());
+        assert_eq!(children.len(), 1);
+    }
+
+    #[test]
+    fn each_type_is_capped_independently_and_a_flood_of_one_type_does_not_crowd_out_another() {
+        let mut raw: Vec<serde_json::Value> = (0..MAX_CHILDREN_PER_TYPE + 10)
+            .map(|i| serde_json::json!([format!("host{i}.example.com"), "DOMAIN_NAME", 1]))
+            .collect();
+        raw.push(serde_json::json!(["mail@example.com", "EMAILADDR", 1]));
+
+        let (children, notes) = build_children(&raw);
+
+        let domain_children = children
+            .iter()
+            .filter(|c| c.oz_type == OzType::Domain)
+            .count();
+        assert_eq!(domain_children, MAX_CHILDREN_PER_TYPE);
+        assert!(
+            children.iter().any(|c| c.oz_type == OzType::Email),
+            "the single email must survive even though DOMAIN_NAME flooded the results"
+        );
+        assert_eq!(notes.len(), 1, "only the truncated type gets a note");
+        assert!(notes[0].label.contains("DOMAIN_NAME"));
+    }
+
+    #[test]
+    fn a_type_under_the_cap_gets_no_truncation_note() {
+        let raw = serde_json::json!([["mail@example.com", "EMAILADDR", 1]]);
+        let (_, notes) = build_children(raw.as_array().unwrap());
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn a_truncation_note_does_not_inflate_the_still_running_finding_count() {
+        let rows = vec![OzRow {
+            label: "IP_ADDRESS".to_string(),
+            value: "1.2.3.4".to_string(),
+            ..Default::default()
+        }];
+        let notes = vec![OzRow {
+            label: "DOMAIN_NAME (SpiderFoot)".to_string(),
+            value: "truncated".to_string(),
+            ..Default::default()
+        }];
+        let produced = results_to_yield(rows, true, vec![], notes);
+        let sweep_note = produced
+            .rows
+            .iter()
+            .find(|r| r.label == "SpiderFoot sweep")
+            .expect("sweep note present");
+        assert!(
+            sweep_note.value.contains("1 finding"),
+            "the child-truncation note must not be counted as a finding: {}",
+            sweep_note.value
+        );
     }
 
     #[tokio::test]

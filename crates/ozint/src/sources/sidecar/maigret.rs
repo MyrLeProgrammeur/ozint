@@ -53,6 +53,19 @@
 //! unlike SpiderFoot (`spiderfoot.rs`), which has no equivalent "stream what's ready so far"
 //! shape and needs the refresh-later pattern instead; see that module's doc for why the two
 //! sidecars end up handled differently despite sharing a time budget.
+//!
+//! ## Why a confirmed hit does NOT become a child — read this before "fixing" it
+//!
+//! A confirmed hit was briefly turned into an `OzType::Username` `ChildSeed` carrying the
+//! queried handle itself — read `wmn.rs`'s module doc for the full reasoning shared by all
+//! three site-list sweeps in this crate (`wmn.rs`, `blackbird.rs`, this file). In short:
+//! Maigret confirms one identity across many sites, not many identities, so a same-value child
+//! always dedups against the node the layer is already running on
+//! (`runtime::emit_child`'s dedup-before-persist step, `runtime.rs:444-458`) and can only ever
+//! add a corroboration record there, never a new node — and no `OzType` in this crate carries a
+//! per-platform profile URL as its identity, so there is no sound value a child could carry
+//! instead. The children were removed once this was confirmed; the row list above is where a
+//! confirmed hit's information actually belongs.
 
 use std::time::Duration;
 

@@ -3,7 +3,10 @@
 //! Keyless. `GET https://rdap.org/domain/{domain}` — verified live 2026-08-21: HTTP 200 for
 //! `anthropic.com`, HTTP **404** for a domain that is not registered.
 //!
-//! Owns exactly two fields of [`crate::types::DomainPayload`]: `registrar` and `createdAt`.
+//! Owns exactly two fields of [`crate::types::DomainPayload`]: `registrar` and `createdAt`. It
+//! also surfaces the abuse contact's email and phone as rows plus [`OzType::Email`]/
+//! [`OzType::Phone`] children — see "The abuse contact" below — neither of which has a
+//! `DomainPayload` field of its own.
 //!
 //! ## Why not the nameservers, which are right there in the response
 //!
@@ -43,13 +46,27 @@
 //! the measured response is the **empty string**. Reaching for "the first `fn` anywhere in the
 //! document" therefore finds a plausible-looking blank. The registrar is selected by its
 //! `roles` containing `"registrar"`, at the top level only.
+//!
+//! ## The abuse contact
+//!
+//! The registrar's nested `entities` carry `email` and `tel` jCard entries alongside the blank
+//! `fn` above — this is the whole reason RDAP replaced WHOIS's free-text abuse block with a
+//! structured one. [`abuse_contacts`] walks every nested entity (not just the one with
+//! `roles: ["abuse"]` — a registrar can publish more than one contact, and a role that doesn't
+//! say "abuse" is still a real reachable address) and collects every `email`/`tel` value found,
+//! deduplicated case-insensitively for email and byte-for-byte for `tel` URIs. `tel` values
+//! arrive as `tel:+1.2086851750`; the `tel:` scheme prefix is stripped since [`OzType::Phone`]
+//! expects a bare number, same convention as every other phone-emitting tool in this crate.
+
+use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 
 use crate::fetch::{self, OzBody, OzOutcome};
 use crate::outcome::ToolOutcome;
-use crate::registry::ToolYield;
+use crate::registry::{ChildSeed, ToolYield};
 use crate::sources::DispatchOutcome;
+use crate::types::{OzRow, OzType};
 
 const RDAP_BOOTSTRAP_BASE: &str = "https://rdap.org/domain/";
 
@@ -58,6 +75,12 @@ const RDAP_BOOTSTRAP_BASE: &str = "https://rdap.org/domain/";
 pub struct RdapRecord {
     pub registrar: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
+    /// Every abuse-and-otherwise contact email found in `entities`, at any depth. See
+    /// [`abuse_contacts`].
+    pub emails: Vec<Contact>,
+    /// Every abuse-and-otherwise contact phone number found in `entities`, at any depth. See
+    /// [`abuse_contacts`].
+    pub phones: Vec<Contact>,
 }
 
 /// Pulls the display name out of a jCard array. See the module doc for the shape.
@@ -100,6 +123,140 @@ pub fn registrar_name(json: &serde_json::Value) -> Option<String> {
         .and_then(jcard_fn)
 }
 
+/// Every value of a given jCard property name (`"email"`, `"tel"`, …), in document order.
+/// Shares `jcard_fn`'s traversal and its defensive indexing — a malformed entry is skipped, not
+/// a reason to fail the whole record — but keeps *all* matches rather than the first, since a
+/// vCard can carry more than one email or phone.
+fn jcard_values(vcard_array: &serde_json::Value, name: &str) -> Vec<String> {
+    let Some(entries) = vcard_array
+        .as_array()
+        .and_then(|a| a.get(1))
+        .and_then(|v| v.as_array())
+    else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let entry = entry.as_array()?;
+            if entry.first().and_then(|v| v.as_str()) != Some(name) {
+                return None;
+            }
+            let value = entry.get(3).and_then(|v| v.as_str())?.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        })
+        .collect()
+}
+
+/// Strips a `tel:` or `mailto:` URI scheme, if present. jCard's `type` element (`"uri"` vs.
+/// `"text"`) decides whether the value carries one — measured on the abuse contact's `tel`
+/// (`"tel:+1.2086851750"`) — but email has not been observed with a `mailto:` prefix, so this
+/// strips defensively rather than trusting the sibling `type` element.
+fn strip_uri_scheme(value: &str) -> &str {
+    value
+        .strip_prefix("tel:")
+        .or_else(|| value.strip_prefix("mailto:"))
+        .unwrap_or(value)
+}
+
+/// Every abuse-and-otherwise contact detail found anywhere in `entities`, recursing into each
+/// entity's own nested `entities` — the abuse contact in the module doc's fixture lives one
+/// level down from the registrar, and nothing says a deeper nesting can't exist. Not scoped to
+/// `roles: ["abuse"]`: a registrar can publish more than one contact, and any published address
+/// is a real, reachable one worth surfacing. Deduplicated case-insensitively for email and
+/// byte-for-byte for phone (already E.164-shaped at the source, so a case fold would be
+/// meaningless there).
+/// A published contact, and whether it is the subject's to pursue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contact {
+    pub value: String,
+    /// False when the contact hangs under a `registrar` entity — see [`contact_details`].
+    pub pivotable: bool,
+}
+
+/// Emails and phones published by a record, each tagged with whose they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContactDetails {
+    pub emails: Vec<Contact>,
+    pub phones: Vec<Contact>,
+}
+
+/// True if this entity declares the `registrar` role.
+fn is_registrar(entity: &serde_json::Value) -> bool {
+    entity
+        .get("roles")
+        .and_then(|v| v.as_array())
+        .is_some_and(|roles| roles.iter().any(|r| r.as_str() == Some("registrar")))
+}
+
+/// Published contact details, and **whose they are**.
+///
+/// The second half of that sentence is the whole difficulty, and getting it wrong was this
+/// function's first bug. Measured against live RDAP on 2026-08-30: `kernel.org` publishes
+/// `abuse@support.gandi.net`, `github.com` publishes `abusecomplaints@markmonitor.com`. Both sit
+/// on an abuse entity **nested under a `registrar` entity**, and neither belongs to the domain's
+/// owner — they are the registrar's own complaints desk, shared by every domain that registrar
+/// serves.
+///
+/// So they are a fact worth showing and a terrible thing to pivot on: firing a layer on
+/// `abuse@support.gandi.net` investigates Gandi, and the same address would attach itself to
+/// thousands of unrelated investigations as if it were a shared identity. That is the same error
+/// `sources/ip/internetdb.rs` refuses when it declines to attribute a stranger's reverse-DNS
+/// records to the subject.
+///
+/// Hence the split: everything published becomes a **row**, and only contacts that are *not*
+/// under a registrar entity become **children**. After GDPR most gTLD records carry nothing but
+/// the registrar's desk, so the child list is usually empty — which is the honest answer, not a
+/// gap. A registrant or technical contact that does survive redaction is genuinely the subject's
+/// and is worth pursuing.
+fn contact_details(json: &serde_json::Value) -> ContactDetails {
+    /// `pivotable` is false once any ancestor is the registrar: a contact inherits the identity
+    /// of the entity it hangs under, not of the record it was found in.
+    fn walk<'a>(
+        entities: &'a [serde_json::Value],
+        under_registrar: bool,
+        out: &mut Vec<(&'a serde_json::Value, bool)>,
+    ) {
+        for entity in entities {
+            let registrar_scope = under_registrar || is_registrar(entity);
+            out.push((entity, !registrar_scope));
+            if let Some(nested) = entity.get("entities").and_then(|v| v.as_array()) {
+                walk(nested, registrar_scope, out);
+            }
+        }
+    }
+
+    let mut all_entities = Vec::new();
+    if let Some(top) = json.get("entities").and_then(|v| v.as_array()) {
+        walk(top, false, &mut all_entities);
+    }
+
+    let mut emails: Vec<Contact> = Vec::new();
+    let mut seen_emails = HashSet::new();
+    let mut phones: Vec<Contact> = Vec::new();
+    let mut seen_phones = HashSet::new();
+
+    for (entity, pivotable) in all_entities {
+        let Some(vcard) = entity.get("vcardArray") else {
+            continue;
+        };
+        for raw in jcard_values(vcard, "email") {
+            let value = strip_uri_scheme(&raw).to_string();
+            if seen_emails.insert(value.to_ascii_lowercase()) {
+                emails.push(Contact { value, pivotable });
+            }
+        }
+        for raw in jcard_values(vcard, "tel") {
+            let value = strip_uri_scheme(&raw).to_string();
+            if seen_phones.insert(value.clone()) {
+                phones.push(Contact { value, pivotable });
+            }
+        }
+    }
+
+    ContactDetails { emails, phones }
+}
+
 /// The registration instant from `events[]`.
 ///
 /// RDAP event dates are RFC 3339 with an explicit offset (measured:
@@ -137,14 +294,18 @@ pub fn parse_rdap_domain(json: &serde_json::Value) -> Result<RdapRecord, String>
         ));
     }
 
+    let contacts = contact_details(json);
     Ok(RdapRecord {
         registrar: registrar_name(json),
         created_at: registration_date(json),
+        emails: contacts.emails,
+        phones: contacts.phones,
     })
 }
 
 /// Turns a record into the payload patch. Writes only `registrar` and `createdAt` — see the
-/// module doc on why `ns` is left to `dom-dns`.
+/// module doc on why `ns` is left to `dom-dns` — plus rows and children for the contact
+/// details, which carry no payload field of their own.
 pub fn rdap_record_to_yield(record: &RdapRecord) -> ToolYield {
     let mut patch = serde_json::Map::new();
     if let Some(registrar) = &record.registrar {
@@ -153,11 +314,59 @@ pub fn rdap_record_to_yield(record: &RdapRecord) -> ToolYield {
     if let Some(created) = record.created_at {
         patch.insert("createdAt".into(), serde_json::json!(created));
     }
-    // No children. A registrar is a company, not an entity this crate can look up: there is no
-    // `Company` type, and seeding `MarkMonitor Inc.` as a `Name` node would send a corporation
-    // to five people-search aggregators.
+    // Registering an entity itself is deliberately not done here: a registrar is a company, not
+    // an entity this crate can look up — there is no `Company` type, and seeding
+    // `MarkMonitor Inc.` as a `Name` node would send a corporation to five people-search
+    // aggregators.
+    //
+    // Contacts are shown in full and pivoted on selectively. Every published address and number
+    // becomes a row, because they are the reason RDAP exists and an analyst should see them.
+    // Only the ones that are not the registrar's become children — see [`contact_details`] for
+    // the measurement behind that, and for why the child list is empty on most gTLD records.
+    // The row says which it is, so an absent child never reads as a missing finding.
+    let mut rows = Vec::new();
+    let mut children = Vec::new();
+    for email in &record.emails {
+        rows.push(OzRow {
+            label: if email.pivotable {
+                "Contact email".into()
+            } else {
+                "Registrar abuse email".into()
+            },
+            value: email.value.clone(),
+            ..Default::default()
+        });
+        if email.pivotable {
+            children.push(ChildSeed {
+                oz_type: OzType::Email,
+                value: email.value.clone(),
+                note: Some("published contact address on the domain's RDAP record".into()),
+            });
+        }
+    }
+    for phone in &record.phones {
+        rows.push(OzRow {
+            label: if phone.pivotable {
+                "Contact phone".into()
+            } else {
+                "Registrar abuse phone".into()
+            },
+            value: phone.value.clone(),
+            ..Default::default()
+        });
+        if phone.pivotable {
+            children.push(ChildSeed {
+                oz_type: OzType::Phone,
+                value: phone.value.clone(),
+                note: Some("published contact number on the domain's RDAP record".into()),
+            });
+        }
+    }
+
     ToolYield {
         payload_patch: serde_json::Value::Object(patch),
+        rows,
+        children,
         ..Default::default()
     }
 }
@@ -227,8 +436,14 @@ pub async fn run_rdap(domain: &str, ctx: &crate::sources::ToolCtx) -> DispatchOu
 
     match parse_rdap_domain(&json) {
         Err(message) => DispatchOutcome::Ran(ToolOutcome::ParseError { message }, None),
-        Ok(record) if record.registrar.is_none() && record.created_at.is_none() => {
-            // A real domain object that carried neither fact. Honest emptiness, not an error.
+        Ok(record)
+            if record.registrar.is_none()
+                && record.created_at.is_none()
+                && record.emails.is_empty()
+                && record.phones.is_empty() =>
+        {
+            // A real domain object that carried none of the facts this tool reads. Honest
+            // emptiness, not an error.
             DispatchOutcome::Ran(
                 ToolOutcome::OkEmpty,
                 Some(ToolYield {
@@ -237,10 +452,16 @@ pub async fn run_rdap(domain: &str, ctx: &crate::sources::ToolCtx) -> DispatchOu
                 }),
             )
         }
-        Ok(record) => DispatchOutcome::Ran(
-            ToolOutcome::OkWithResults { count: 1 },
-            Some(rdap_record_to_yield(&record)),
-        ),
+        Ok(record) => {
+            // 1 for the registrar/date payload patch (even when both are absent but a contact
+            // was found, this still counts as "found the record itself"), plus one per contact
+            // detail surfaced.
+            let count = 1 + record.emails.len() as u32 + record.phones.len() as u32;
+            DispatchOutcome::Ran(
+                ToolOutcome::OkWithResults { count },
+                Some(rdap_record_to_yield(&record)),
+            )
+        }
     }
 }
 
@@ -250,7 +471,11 @@ mod tests {
 
     /// The real `anthropic.com` response, trimmed to what this tool reads — including the
     /// nested abuse contact whose `fn` is the empty string, which is the thing that makes a
-    /// naive "first `fn` anywhere" search wrong.
+    /// naive "first `fn` anywhere" search wrong. The `email` entry is added by hand to the
+    /// transcription (the live fetch this was measured from predates the contact-extraction
+    /// code and this test suite only recorded `tel`) — same convention as `peeringdb`'s
+    /// hand-added `poc_set`; MarkMonitor's abuse address is publicly documented as
+    /// `abusecomplaints@markmonitor.com`.
     fn anthropic_rdap() -> serde_json::Value {
         serde_json::json!({
             "objectClassName": "domain",
@@ -279,7 +504,8 @@ mod tests {
                     "vcardArray": ["vcard", [
                         ["version", {}, "text", "4.0"],
                         ["fn", {}, "text", ""],
-                        ["tel", { "type": "voice" }, "uri", "tel:+1.2086851750"]
+                        ["tel", { "type": "voice" }, "uri", "tel:+1.2086851750"],
+                        ["email", {}, "text", "abusecomplaints@markmonitor.com"]
                     ]]
                 }]
             }]
@@ -334,6 +560,128 @@ mod tests {
         }
     }
 
+    // ── contacts ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn jcard_values_finds_every_match_not_just_the_first() {
+        let vcard = serde_json::json!([
+            "vcard",
+            [
+                ["email", {}, "text", "first@example.com"],
+                ["fn", {}, "text", "irrelevant"],
+                ["email", {}, "text", "second@example.com"],
+            ]
+        ]);
+        assert_eq!(
+            jcard_values(&vcard, "email"),
+            vec!["first@example.com", "second@example.com"]
+        );
+        assert_eq!(jcard_values(&vcard, "tel"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn strip_uri_scheme_removes_tel_and_mailto_but_leaves_a_bare_value_alone() {
+        assert_eq!(strip_uri_scheme("tel:+1.2086851750"), "+1.2086851750");
+        assert_eq!(
+            strip_uri_scheme("mailto:abuse@example.com"),
+            "abuse@example.com"
+        );
+        assert_eq!(strip_uri_scheme("abuse@example.com"), "abuse@example.com");
+    }
+
+    #[test]
+    fn contact_details_recurses_into_nested_entities_and_strips_uri_schemes() {
+        let found = contact_details(&anthropic_rdap());
+        // The registrar entity itself carries no email/tel — only its nested abuse entity does.
+        assert_eq!(found.emails[0].value, "abusecomplaints@markmonitor.com");
+        assert_eq!(found.phones[0].value, "+1.2086851750");
+    }
+
+    #[test]
+    fn a_registrars_own_abuse_desk_is_never_pivotable() {
+        // The property this whole split exists for. Measured against live RDAP on 2026-08-30:
+        // both kernel.org and github.com publish only their registrar's shared complaints desk,
+        // nested under a `registrar` entity. Seeding that as an Email node would send the
+        // analyst to investigate Gandi or MarkMonitor, and would attach one address to every
+        // unrelated investigation of a domain that registrar happens to serve.
+        let found = contact_details(&anthropic_rdap());
+        assert!(
+            found.emails.iter().all(|c| !c.pivotable),
+            "a contact under a registrar entity must not be offered as a node"
+        );
+        assert!(found.phones.iter().all(|c| !c.pivotable));
+    }
+
+    #[test]
+    fn a_contact_outside_the_registrar_subtree_is_pivotable() {
+        // The case that survives GDPR redaction: a registrant or technical contact published on
+        // the record itself. That one genuinely is the subject's, and is worth pursuing.
+        let json = serde_json::json!({
+            "entities": [{
+                "roles": ["registrant"],
+                "vcardArray": ["vcard", [["email", {}, "text", "owner@example.com"]]]
+            }]
+        });
+        let found = contact_details(&json);
+        assert_eq!(found.emails.len(), 1);
+        assert!(found.emails[0].pivotable);
+    }
+
+    #[test]
+    fn abuse_contacts_dedupes_email_case_insensitively_and_phone_exactly() {
+        let json = serde_json::json!({
+            "entities": [
+                {
+                    "roles": ["abuse"],
+                    "vcardArray": ["vcard", [
+                        ["email", {}, "text", "Abuse@Example.com"],
+                        ["tel", {}, "uri", "tel:+15551234567"]
+                    ]]
+                },
+                {
+                    "roles": ["technical"],
+                    "vcardArray": ["vcard", [
+                        ["email", {}, "text", "abuse@example.com"],
+                        ["tel", {}, "uri", "tel:+15551234567"]
+                    ]]
+                }
+            ]
+        });
+        let found = contact_details(&json);
+        assert_eq!(
+            found
+                .emails
+                .iter()
+                .map(|c| c.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Abuse@Example.com"],
+            "the first-seen casing is kept, the repeat is dropped"
+        );
+        assert_eq!(
+            found
+                .phones
+                .iter()
+                .map(|c| c.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["+15551234567"]
+        );
+    }
+
+    #[test]
+    fn a_record_with_no_contact_details_yields_no_emails_or_phones() {
+        let json = serde_json::json!({
+            "entities": [{
+                "roles": ["registrar"],
+                "vcardArray": ["vcard", [["fn", {}, "text", "Some Registrar"]]]
+            }]
+        });
+        assert_eq!(contact_details(&json), ContactDetails::default());
+        assert_eq!(
+            contact_details(&serde_json::json!({})),
+            ContactDetails::default()
+        );
+    }
+
     // ── events ───────────────────────────────────────────────────────────
 
     #[test]
@@ -382,12 +730,14 @@ mod tests {
         let record = parse_rdap_domain(&anthropic_rdap()).expect("parses");
         assert_eq!(record.registrar.as_deref(), Some("MarkMonitor Inc."));
         assert!(record.created_at.is_some());
+        assert_eq!(record.emails[0].value, "abusecomplaints@markmonitor.com");
+        assert_eq!(record.phones[0].value, "+1.2086851750");
     }
 
     // ── yield ────────────────────────────────────────────────────────────
 
     #[test]
-    fn the_yield_writes_only_the_two_fields_this_tool_owns() {
+    fn the_yield_writes_only_the_two_payload_fields_this_tool_owns() {
         // `ns` is right there in the response and is deliberately not written — `dom-dns` owns
         // it, and a shallow last-writer-wins merge would let these two silently fight over it.
         let record = parse_rdap_domain(&anthropic_rdap()).expect("parses");
@@ -402,10 +752,76 @@ mod tests {
             !obj.contains_key("subdomains"),
             "subdomains belong to dom-certspotter"
         );
+        // This record publishes only the registrar's own abuse desk, so it yields the contact
+        // as rows and offers no children. An empty child list here is the correct answer, not a
+        // missing finding — see `contact_details`.
+        assert!(
+            yielded
+                .rows
+                .iter()
+                .any(|r| r.label == "Registrar abuse email"),
+            "the abuse contact must still be visible as a row"
+        );
         assert!(
             yielded.children.is_empty(),
-            "a registrar is not an entity to pivot on"
+            "a registrar's shared abuse desk must not be offered as a node"
         );
+    }
+
+    #[test]
+    fn a_pivotable_contact_becomes_both_a_row_and_a_typed_child() {
+        // The mirror of `the_yield_writes_only_the_two_payload_fields_this_tool_owns`: when the
+        // contact is genuinely the subject's, it is offered as a node as well as shown.
+        let json = serde_json::json!({
+            "objectClassName": "domain",
+            "ldhName": "example.com",
+            "entities": [{
+                "roles": ["registrant"],
+                "vcardArray": ["vcard", [
+                    ["email", {}, "text", "owner@example.com"],
+                    ["tel", {}, "uri", "tel:+15550001111"]
+                ]]
+            }]
+        });
+        let record = parse_rdap_domain(&json).expect("parses");
+        let yielded = rdap_record_to_yield(&record);
+
+        assert!(
+            yielded
+                .rows
+                .iter()
+                .any(|r| r.label == "Contact email" && r.value == "owner@example.com"),
+            "a pivotable contact is labelled as the contact, not as the registrar's desk"
+        );
+
+        let email_child = yielded
+            .children
+            .iter()
+            .find(|c| c.oz_type == OzType::Email)
+            .expect("an email child");
+        assert_eq!(email_child.value, "owner@example.com");
+
+        let phone_child = yielded
+            .children
+            .iter()
+            .find(|c| c.oz_type == OzType::Phone)
+            .expect("a phone child");
+        assert_eq!(phone_child.value, "+15550001111");
+
+        assert_eq!(yielded.children.len(), 2, "no other children are produced");
+    }
+
+    #[test]
+    fn a_record_with_no_contacts_yields_no_contact_rows_or_children() {
+        let record = RdapRecord {
+            registrar: Some("Some Registrar".to_string()),
+            created_at: None,
+            emails: Vec::new(),
+            phones: Vec::new(),
+        };
+        let yielded = rdap_record_to_yield(&record);
+        assert!(yielded.rows.is_empty());
+        assert!(yielded.children.is_empty());
     }
 
     #[test]
