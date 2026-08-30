@@ -64,28 +64,41 @@ fn seed_method(method: classify::ClassifyMethod) -> &'static str {
     }
 }
 
-fn bad_request(message: impl Into<String>) -> Response {
+/// The three error constructors below return a **boxed** `Response`.
+///
+/// `axum::Response` is ~128 bytes, and `setup_seed`/`setup_continue` return it as their `Err`
+/// variant — which makes every one of their `Result`s that large even on the success path, the
+/// case clippy's `result_large_err` exists to catch. Boxing moves the cost onto the error path,
+/// where one allocation on the way to returning an HTTP error is not worth measuring.
+///
+/// Caught by CI rather than locally: the lint fires on a newer stable clippy than the
+/// toolchain this was written on, which is exactly the kind of drift a CI pinned to `stable`
+/// is meant to surface.
+fn bad_request(message: impl Into<String>) -> Box<Response> {
     (
         StatusCode::BAD_REQUEST,
         Json(json!({ "error": message.into() })),
     )
         .into_response()
+        .into()
 }
 
-fn not_found(message: impl Into<String>) -> Response {
+fn not_found(message: impl Into<String>) -> Box<Response> {
     (
         StatusCode::NOT_FOUND,
         Json(json!({ "error": message.into() })),
     )
         .into_response()
+        .into()
 }
 
-fn server_error(err: impl std::fmt::Display) -> Response {
+fn server_error(err: impl std::fmt::Display) -> Box<Response> {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "error": err.to_string() })),
     )
         .into_response()
+        .into()
 }
 
 /// `{seed}` branch: classify the raw seed, create a fresh investigation and root node, then
@@ -95,7 +108,7 @@ async fn setup_seed(
     raw_seed: &str,
     show_summary: bool,
     forced_type: Option<OzType>,
-) -> Result<LayerContext, Response> {
+) -> Result<LayerContext, Box<Response>> {
     let seed = raw_seed.trim();
     if seed.is_empty() {
         return Err(bad_request("seed must not be empty"));
@@ -206,7 +219,7 @@ async fn setup_continue(
     investigation_id: &str,
     parent_node_id: &str,
     show_summary: bool,
-) -> Result<LayerContext, Response> {
+) -> Result<LayerContext, Box<Response>> {
     let parent = store::get_node(&state.db, parent_node_id).map_err(server_error)?;
     let Some(parent) = parent else {
         return Err(not_found("parent node not found"));
@@ -263,7 +276,7 @@ pub async fn fire(State(state): State<AppState>, Json(body): Json<FireBody>) -> 
 
     let ctx = match setup {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     stream_layer(state, ctx)

@@ -50,6 +50,12 @@ cd web && npm run lint
 
 A clippy warning is a failure here, not a suggestion.
 
+**A green clippy locally is not proof.** CI runs it on current stable, which may be newer than
+your toolchain and will know lints yours does not — the first CI run on this repository failed on
+a lint that did not exist in the maintainer's own compiler. That is the gate working as intended,
+not CI being difficult: `rustup update` before you are surprised by it. The `rust-version = 1.88`
+floor in `Cargo.toml` is about what will *build*, and says nothing about what will lint.
+
 ## Adding a source
 
 [ARCHITECTURE.md §5](ARCHITECTURE.md) walks through it against a real file. The short version:
