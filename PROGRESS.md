@@ -5,6 +5,54 @@ just which files moved. Current state lives in [STATUS.md](STATUS.md); this file
 
 ---
 
+## 2026-08-31 — `ip-virustotal` grows the tree, and a dead field turned up on the way
+
+The largest remaining gap in `ip/` (#12): the tool fetched VirusTotal's IP report and stopped,
+never asking for the two sub-resources that are VirusTotal's whole pivot value for an address.
+It now seeds `Hash` children for files observed communicating with the address and `Domain`
+children for passive-DNS resolutions. Fired live against `8.8.8.8` through a real server: 21
+results, 10 + 10 children, rows rendering with links.
+
+**One request, not three, and the reason is the scheduler.** The relationships are reachable as
+their own sub-resources returning full objects — measured, a resolution fetched that way carries
+the passive-DNS `date`, which is a real loss. They are requested inline through
+`?relationships=` anyway, because `runtime.rs` takes **one scheduler permit per tool dispatch**:
+extra requests made inside a tool are invisible to the `"virustotal"` token bucket, which is
+shared by four callers against a 4/min · 500/day budget. `dom-dns` fires three DoH requests on
+one permit harmlessly; doing the same here would spend triple what the scheduler believes it is
+spending, and the bill arrives as a ban noticed days later. The inline form costs zero extra
+quota. If the sub-resource form is ever wanted, the accounting has to be fixed first.
+
+**Two traps, both measured, both now in the module doc.** A resolution descriptor's id is the
+address and the hostname concatenated with no separator — `8.8.8.8tst23638229.cn.trustexporter`
+`.com` — so reading it naively fabricates a hostname that does not exist, the same shape as
+`certspotter`'s `advancedjs.bitinvestor.net` problem. The prefix is stripped using VirusTotal's
+own spelling of the address from `data.id`, and an id that does not carry it is dropped rather
+than cut at a guessed offset. The second trap is worse and has no code fix: `8.8.8.8`'s twenty
+resolutions are spam and parking hosts with nothing to do with Google. Pointing a record at a
+shared address is unilateral, so passive DNS on shared infrastructure is mostly other people's
+traffic — and unlike a certificate log there is no scoping rule that can filter it, because the
+relationship asserts no ownership to test against. The answer is a cap of half the subdomain
+cap, plus the caveat stated as a row.
+
+**`ChildSeed::note` is read by nothing, catalogue-wide.** Found by looking at what the live fire
+actually put in front of an analyst rather than at what the unit test asserted. `emit_child`
+builds each child's `Provenance` from `ToolDef::id`/`ToolDef::method` and never touches
+`seed.note`, so the notes written by `dom-certspotter`, `ip-peeringdb`, `hash-urlhaus`,
+`dom-rdap`, `cve-poc-github` and now this tool go nowhere. The caveat was moved to a row, which
+does render; the note is still set, because it is the right data in the right place and wiring
+it is an engine change, not a source one. This belongs with #13's dead fields.
+
+**Two smaller things the tests caught.** A truncation marker labelled identically to the rows it
+qualifies reads as one more finding of the same kind — qualifier rows now carry a parenthesised
+label (`(partial)`, `(caution)`) and a test holds the convention. And the cache key is now
+namespaced `rel:{ip}`: `ToolCtx::fetch` keys on `(tool_id, cache_key)` and **not** on the URL,
+so the bare address would have let a row written by the older relationship-less request satisfy
+this one for 24h — a body that parses perfectly and yields no children, indistinguishable from
+an address that genuinely has none.
+
+---
+
 ## 2026-08-30 (evening) — The tree does not grow, and three audits worked out why
 
 The owner fired a layer on his own email address and got no new nodes. That turned out to be the

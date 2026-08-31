@@ -14,10 +14,17 @@
 //! | [`internetdb`] | `ports`, `anonymizer` | hostnames, software (CPE), Shodan tags |
 //! | [`peeringdb`] | *nothing* | the operator's own network record — see its module doc |
 //! | [`abuseipdb`] | `abuseScore` | confidence, report count |
-//! | [`virustotal`] | `vtMalicious`, `vtReputation` | AS owner |
+//! | [`virustotal`] | `vtMalicious`, `vtReputation` | AS owner, communicating files, passive DNS |
 //! | [`greynoise`] | `classification` | noise/RIOT status |
 //! | [`maxmind`] | *nothing* | corroborating geo, see its module doc |
 //! | [`censys`], [`netlas`] | *nothing* | location/ASN/ports/software corroboration |
+//!
+//! Two tools in this category seed children into the tree: [`peeringdb`] (the operator's own
+//! website and its published points of contact) and [`virustotal`] (`Hash` children for files
+//! observed communicating with the address, `Domain` children for passive-DNS resolutions).
+//! The passive-DNS children carry a caveat in their note for a reason its module doc spells
+//! out — on shared infrastructure a resolution is somebody else's traffic, and unlike a
+//! certificate log there is no scoping rule that can tell the two apart.
 //!
 //! ## Three waves, now built end to end
 //!
