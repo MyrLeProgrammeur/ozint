@@ -585,6 +585,20 @@ pub const MAX_VIDEO_KEYFRAMES: usize = 12;
 /// node for each stops being readable well before it stops being accurate.
 pub const MAX_VULN_CHILDREN: usize = 20;
 
+/// How many children one VirusTotal relationship may seed on an IP node — applied separately
+/// to `communicating_files` and to `resolutions`, so one `ip-virustotal` invocation seeds at
+/// most twice this many.
+///
+/// Half [`MAX_SUBDOMAIN_CHILDREN`], and deliberately below the 20 items VirusTotal returns per
+/// relationship, for a reason specific to passive DNS: a subdomain from a certificate log is
+/// in-scope by construction (`certspotter::extract_in_scope_names` proves it), whereas a
+/// resolution is only ever "some host pointed here once". On shared infrastructure that is
+/// mostly unrelated traffic — measured against `8.8.8.8`, whose 20 resolutions are spam hosts
+/// with no connection to Google — and there is no scoping rule that can filter it, because
+/// the relationship carries no ownership claim to test. The cap is therefore the only bound
+/// available, and it is set where a wrong lead costs a glance rather than a screen.
+pub const MAX_VT_RELATION_CHILDREN: usize = 10;
+
 /// A launch-only tile: a tool with no usable API, rendered as `NO NATIVE SEARCH` / `OPEN ↗`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
